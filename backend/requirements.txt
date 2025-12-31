@@ -1,0 +1,12 @@
+fastapi==0.95.2
+uvicorn[standard]==0.21.1
+torch==2.2.0
+numpy==1.26.4
+pandas==2.2.2
+shap==0.42.1
+matplotlib==3.8.1
+python-multipart==0.0.6
+aiofiles==23.1.0
+pydub==0.25.1
+librosa==0.11.0
+scipy==1.11.3

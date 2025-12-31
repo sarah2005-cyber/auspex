@@ -1,0 +1,31 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import ResidualUnit.DualStreamSResNet5Res as DualStreamSResNet5Res
+import AttentionFeatureFusionSPM as AttentionFeatureFusionSPM
+import LightweightCNNClassifier as LightweightCNNClassifier
+import EmbeddingRateEstimator as EmbeddingRateEstimator
+
+# ---- Full Pipeline Model ----
+class FullPipelineModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.dual_stream = DualStreamSResNet5Res()
+        self.fusion = AttentionFeatureFusionSPM()
+        self.classifier = LightweightCNNClassifier()
+        self.embed_estimator = EmbeddingRateEstimator()  # optional head
+
+    def forward(self, spec1024, spec512):
+        # Stage 2: dual-stream feature extraction
+        feat48 = self.dual_stream(spec1024, spec512)  # (batch, 48)
+
+        # Stage 3: attention-based fusion
+        fused64, alpha = self.fusion(feat48)          # (batch, 64), (batch,1)
+
+        # Stage 4: CNN classification
+        logits = self.classifier(fused64)             # (batch, 2)
+
+        # Optional: embedding rate estimation (only used if pred=stego)
+        emb_rate = self.embed_estimator(fused64)
+
+        return logits, alpha, emb_rate

@@ -1,0 +1,21 @@
+# Virtual environments
+venv/
+.venv/
+backend/.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Node
+node_modules/
+frontend/node_modules/
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Data & models
+data/
+models/*.pt
+models/*.pth
