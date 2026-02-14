@@ -1,160 +1,251 @@
-import sys
-from pathlib import Path
-import numpy as np
+import streamlit as st
 import torch
 import torch.nn as nn
-from typing import List, Union
+import torch.nn.functional as F
+import librosa
+import numpy as np
+import os
+import subprocess
+import tempfile
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+from pathlib import Path
 
-# Make sure we can import the model components from the repo root
-THIS_DIR = Path(__file__).resolve().parent
-REPO_ROOT = THIS_DIR.parent
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-# Import the real building blocks from the repository
-try:
-    from AttentionFeatureFusionSPM import AttentionFeatureFusionSPM
-    from LightweightCNNClassifier import LightweightCNNClassifier
-    from EmbeddingRateEstimator import EmbeddingRateEstimator
-    from ResidualUnit import DualStreamSResNet5Res
-except Exception as e:
-    # If imports fail, raise a helpful message when used
-    # but allow the module to be imported for editing.
-    AttentionFeatureFusionSPM = None
-    LightweightCNNClassifier = None
-    EmbeddingRateEstimator = None
-    DualStreamSResNet5Res = None
-    _IMPORT_ERROR = e
-
-
-class FullPipelineModel(nn.Module):
-    """Replicate the training-time FullPipelineModel from repo so checkpoints
-    load into matching keys. The model composes:
-      - DualStreamSResNet5Res -> produces (batch, 48)
-      - AttentionFeatureFusionSPM -> (48 -> 64)
-      - LightweightCNNClassifier -> classifier head (64 -> logits)
-      - EmbeddingRateEstimator -> embedding rate head (64 -> 1)
-
-    This class mirrors the repo's implementation and will accept two inputs
-    in forward(spec1024, spec512). For inference convenience, helper
-    functions below will also accept a 48- or 64-dimensional feature vector.
-    """
-
+# ==========================================
+# 1. MODEL DEFINITIONS
+# ==========================================
+class FixedHPF(nn.Module):
     def __init__(self):
         super().__init__()
-        if AttentionFeatureFusionSPM is None or LightweightCNNClassifier is None or DualStreamSResNet5Res is None:
-            raise ImportError(f"Missing model component imports: {_IMPORT_ERROR}")
+        kernel = torch.tensor([[[[-1.0, 2.0, -1.0]]]])
+        self.register_buffer('weight', kernel)
 
-        self.dual_stream = DualStreamSResNet5Res()
-        self.fusion = AttentionFeatureFusionSPM()
-        self.classifier = LightweightCNNClassifier()
-        self.embed_estimator = EmbeddingRateEstimator()
+    def forward(self, x):
+        x_padded = F.pad(x, (1, 1, 0, 0), mode='reflect')
+        return F.conv2d(x_padded, self.weight)
 
-    def forward(self, spec1024: torch.Tensor, spec512: torch.Tensor):
-        feat48 = self.dual_stream(spec1024, spec512)  # (batch, 48)
-        fused64, alpha = self.fusion(feat48)          # (batch,64), (batch,1)
-        logits = self.classifier(fused64)             # (batch, 2)
-        emb_rate = self.embed_estimator(fused64)      # (batch,1)
-        return logits, alpha, emb_rate
+class SFFN_1D_Stream(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.layer1 = nn.Sequential(
+            nn.Conv2d(1, 16, kernel_size=(1, 9), padding=(0, 4)),
+            nn.BatchNorm2d(16), nn.ReLU(), nn.MaxPool2d((1, 2))
+        )
+        self.layer2 = nn.Sequential(
+            nn.Conv2d(16, 32, kernel_size=(3, 3), padding=(1, 1)),
+            nn.BatchNorm2d(32), nn.ReLU(), nn.MaxPool2d((2, 2))
+        )
+        self.layer3 = nn.Sequential(
+            nn.Conv2d(32, 64, kernel_size=(3, 3), padding=(1, 1)),
+            nn.BatchNorm2d(64), nn.ReLU(), nn.MaxPool2d((2, 2))
+        )
+        self.spatial_pool = nn.AdaptiveMaxPool2d((8, 8))
 
+    def forward(self, x):
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.spatial_pool(x)
+        return x.view(x.size(0), -1)
 
-def load_model(checkpoint_path: str, device: str = None) -> FullPipelineModel:
-    """Load checkpoint into FullPipelineModel. Uses strict=False to be tolerant
-    to minor naming differences; for production replace with exact matching class
-    definitions and strict=True.
-    """
-    if device is None:
-        device = "cpu"
+class SFFNLite_Universal(nn.Module):
+    def __init__(self, stats_1024=(1.0754, 1.3645), stats_512=(0.4015, 0.5033)):
+        super().__init__()
+        self.register_buffer("m1", torch.tensor(stats_1024[0]))
+        self.register_buffer("std1", torch.tensor(stats_1024[1]))
+        self.register_buffer("m2", torch.tensor(stats_512[0]))
+        self.register_buffer("std2", torch.tensor(stats_512[1]))
+        self.hpf = FixedHPF()
+        self.s1024 = SFFN_1D_Stream()
+        self.s512 = SFFN_1D_Stream()
+        self.fusion_weight = nn.Parameter(torch.tensor(0.5))
+        self.classifier = nn.Linear(4096, 2)
 
-    ckpt_path = Path(checkpoint_path)
-    if not ckpt_path.exists():
-        print(f"Checkpoint not found at {checkpoint_path}")
-        return None
+    def forward(self, x1, x2):
+        x1 = (x1 - self.m1) / (self.std1 + 1e-6)
+        x2 = (x2 - self.m2) / (self.std2 + 1e-6)
+        f1 = self.s1024(self.hpf(x1))
+        f2 = self.s512(self.hpf(x2))
+        
+        alpha_1024 = torch.sigmoid(self.fusion_weight)
+        alpha_512 = 1 - alpha_1024
+        
+        fused = alpha_1024 * f1 + alpha_512 * f2
+        logits = self.classifier(fused)
+        
+        # Returns intrinsic XAI data (alphas)
+        return logits, {'alpha_1024': alpha_1024.item(), 'alpha_512': alpha_512.item()}
 
-    model = FullPipelineModel()
-    model.to(device)
+# ==========================================
+# 2. XAI EXPLAINER CLASS 
+# ==========================================
+class ForensicExplainer:
+    def __init__(self, model, device):
+        self.model = model.to(device).eval()
+        self.device = device
 
-    ckpt = torch.load(str(ckpt_path), map_location=device)
-    # Support both raw state_dict and training dict wrappers
-    if isinstance(ckpt, dict) and "state_dict" in ckpt:
-        state = ckpt["state_dict"]
-    else:
-        state = ckpt
+    def saliency_map(self, x1, x2, target=1):
+        """Generates attribution maps using gradient-based saliency (fast)."""
+        x1 = x1.clone().requires_grad_(True)
+        x2 = x2.clone().requires_grad_(True)
+        
+        # Forward pass
+        logits, _ = self.model(x1, x2)
+        score = logits[:, target].sum()
+        
+        # Backward pass
+        score.backward()
+        
+        # Saliency is the absolute gradient
+        sal1 = x1.grad.abs().detach()
+        sal2 = x2.grad.abs().detach()
+        
+        return sal1, sal2
 
-    try:
-        model.load_state_dict(state, strict=False)
-        print("Loaded checkpoint into FullPipelineModel (strict=False).")
-    except Exception as e:
-        print(f"Warning: load_state_dict failed: {e}")
-    model.eval()
-    return model
+# ==========================================
+# 3. ROBUST PREPROCESSING
+# ==========================================
+def preprocess_for_streamlit(file_path):
+    target_sr = 44100
+    temp_dir = tempfile.mkdtemp()
+    decoded_path = os.path.join(temp_dir, "decoded.wav")
+    
+    # Decoding logic matching notebook
+    cmd = ["ffmpeg", "-y"]
+    if file_path.endswith(".pcm"):
+        cmd.extend(["-f", "s16le", "-ar", "8000", "-ac", "1"])
+    elif file_path.endswith(".g729a"):
+        cmd.extend(["-f", "g729"])
+    cmd.extend(["-i", file_path, "-ar", str(target_sr), "-ac", "1", decoded_path])
+    
+    subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    
+    y, sr = librosa.load(decoded_path, sr=None, mono=True)
+    if sr != target_sr:
+        y = librosa.resample(y, orig_sr=sr, target_sr=target_sr)
+    
+    # Forensic Standardization
+    if not np.isfinite(y).all():
+        y = np.nan_to_num(y, nan=0.0)
+    y = np.clip(y, -1.0, 1.0)
 
+    # Spectrogram Extraction
+    def get_spec(audio, n_fft, hop, target_frames):
+        spec = np.abs(librosa.stft(audio, n_fft=n_fft, hop_length=hop, window="hamming"))
+        spec = librosa.amplitude_to_db(spec, ref=np.max)
+        if spec.shape[1] < target_frames:
+            spec = np.pad(spec, ((0, 0), (0, target_frames - spec.shape[1])))
+        else:
+            spec = spec[:, :target_frames]
+        return spec
 
-def preprocess_input(raw_features: Union[List[float], dict]):
-    """Preprocessing helper that accepts either:
-      - a list/1D array of floats representing fused 64-dim features,
-      - a list/1D array of 48-dim features (dual-stream output), or
-      - a dict with keys 'spec1024' and 'spec512' containing 2D arrays for the two spectrogram inputs.
+    spec1024 = get_spec(y, 1024, 512, 87)
+    spec512 = get_spec(y, 512, 256, 173)
+    
+    # Cleanup
+    if os.path.exists(decoded_path): os.remove(decoded_path)
+    os.rmdir(temp_dir)
+    return spec1024, spec512
 
-    Returns a numpy array shaped (batch, features) ready for model_predict_numpy.
-    """
-    # spec inputs as dict
-    if isinstance(raw_features, dict):
-        # Expect raw_features = {'spec1024': np.array(...), 'spec512': np.array(...)}
-        return raw_features
+# ==========================================
+# 4. STREAMLIT UI
+# ==========================================
+st.set_page_config(page_title="Universal Audio Steganalysis", layout="wide")
+st.title("🛡️ Forensic Audio Steganalysis")
 
-    x = np.array(raw_features, dtype=float)
-    if x.ndim == 1:
-        x = x.reshape(1, -1)
-    return x
+# Load Model
+@st.cache_resource
+def load_trained_model():
+    ckpt_path = "Auspex_Universal_v1_seed2026_best_epoch.pt"
+    model = SFFNLite_Universal()
+    if os.path.exists(ckpt_path):
+        ckpt = torch.load(ckpt_path, map_location='cpu', weights_only=False)
+        state_dict = ckpt['model_state_dict'] if 'model_state_dict' in ckpt else ckpt
+        # Filter unexpected keys
+        state_dict = {k: v for k, v in state_dict.items() if k in model.state_dict()}
+        model.load_state_dict(state_dict, strict=False)
+        model.eval()
+        return model
+    return None
 
+model = load_trained_model()
+device = "cuda" if torch.cuda.is_available() else "cpu"
 
-def model_predict_numpy(model: FullPipelineModel, X: np.ndarray):
-    """Run model inference from numpy input X.
+uploaded_file = st.file_uploader("Upload Audio", type=["wav", "g729a", "pcm"])
 
-    Behavior:
-      - If X is a dict with 'spec1024' and 'spec512', run full model forward and
-        return logits (as numpy), alpha and emb_rate.
-      - If X has shape (batch, 64) -> treat as fused features and run classifier + embed_estimator.
-      - If X has shape (batch, 48) -> treat as dual-stream output, run fusion -> classifier.
+if uploaded_file and model:
+    # Save temp file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded_file.name).suffix) as tfile:
+        tfile.write(uploaded_file.read())
+        tpath = tfile.name
 
-    Returns a dict with keys depending on path: e.g. {'logits':..., 'alpha':..., 'emb_rate':...}
-    """
-    model.eval()
-    with torch.no_grad():
-        # Full spec inputs path
-        if isinstance(X, dict):
-            spec1024 = torch.from_numpy(np.array(X['spec1024'])).float()
-            spec512 = torch.from_numpy(np.array(X['spec512'])).float()
-            logits, alpha, emb_rate = model(spec1024, spec512)
-            return {
-                'logits': logits.detach().cpu().numpy(),
-                'alpha': alpha.detach().cpu().numpy(),
-                'emb_rate': emb_rate.detach().cpu().numpy()
-            }
+    col1, col2 = st.columns(2)
+    with col1:
+        predict_btn = st.button(" Detect Steganography", use_container_width=True)
+    with col2:
+        explain_btn = st.button(" Explain Decision (XAI)", use_container_width=True)
 
-        t = torch.from_numpy(X).float()
-        # fused 64-dim path
-        if t.dim() == 1:
-            t = t.unsqueeze(0)
+    if predict_btn or explain_btn:
+        with st.spinner("Processing Audio..."):
+            s1024, s512 = preprocess_for_streamlit(tpath)
+            t1024 = torch.from_numpy(s1024).unsqueeze(0).unsqueeze(0).float().to(device)
+            t512 = torch.from_numpy(s512).unsqueeze(0).unsqueeze(0).float().to(device)
+            
+            # Inference
+            with torch.no_grad():
+                logits, attn = model(t1024, t512)
+                probs = F.softmax(logits, dim=1)[0]
+                pred = torch.argmax(probs).item()
 
-        if t.size(1) == 64:
-            logits = model.classifier(t)
-            emb_rate = model.embed_estimator(t)
-            return {
-                'logits': logits.detach().cpu().numpy(),
-                'emb_rate': emb_rate.detach().cpu().numpy()
-            }
+        # --- RESULT DISPLAY ---
+        st.divider()
+        res_col1, res_col2 = st.columns([1, 2])
+        
+        with res_col1:
+            st.subheader("Verdict")
+            if pred == 1:
+                st.error(" STEGO DETECTED")
+            else:
+                st.success(" CLEAN AUDIO")
+            
+            st.metric("Confidence", f"{probs[pred]*100:.2f}%")
+            
+            # Intrinsic XAI Display
+            st.markdown("**Intrinsic Model Reliance:**")
+            st.progress(attn['alpha_1024'], text=f"1024-Stream (Texture): {attn['alpha_1024']:.2f}")
+            st.progress(attn['alpha_512'], text=f"512-Stream (Temporal): {attn['alpha_512']:.2f}")
 
-        # dual-stream 48-dim path -> fusion -> classifier
-        if t.size(1) == 48:
-            fused, alpha = model.fusion(t)
-            logits = model.classifier(fused)
-            emb_rate = model.embed_estimator(fused)
-            return {
-                'logits': logits.detach().cpu().numpy(),
-                'alpha': alpha.detach().cpu().numpy(),
-                'emb_rate': emb_rate.detach().cpu().numpy()
-            }
+        with res_col2:
+            st.subheader("Input Spectrograms")
+            fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 3))
+            ax1.imshow(s1024, aspect='auto', origin='lower', cmap='magma'); ax1.set_title("1024-FFT")
+            ax2.imshow(s512, aspect='auto', origin='lower', cmap='magma'); ax2.set_title("512-FFT")
+            st.pyplot(fig)
 
-        raise ValueError(f"Unexpected input shape for prediction: {t.shape}. Expected 48 or 64 features or a dict with spec1024/spec512.")
+        # --- POST-HOC XAI DISPLAY ---
+        if explain_btn:
+            st.divider()
+            st.subheader(" Post-Hoc Forensic Analysis")
+            with st.spinner("Generating Saliency Maps..."):
+                explainer = ForensicExplainer(model, device)
+                sal1, sal2 = explainer.saliency_map(t1024, t512, target=pred)
+                
+                # Visualize Attributions
+                
+                fig_xai, (xax1, xax2) = plt.subplots(1, 2, figsize=(12, 4))
+                
+                # 1024 Stream Attribution
+                im1 = xax1.imshow(sal1.squeeze().cpu().numpy(), aspect='auto', origin='lower', cmap='jet')
+                xax1.set_title("Feature Importance (1024 Stream)")
+                plt.colorbar(im1, ax=xax1)
+                
+                # 512 Stream Attribution
+                im2 = xax2.imshow(sal2.squeeze().cpu().numpy(), aspect='auto', origin='lower', cmap='jet')
+                xax2.set_title("Feature Importance (512 Stream)")
+                plt.colorbar(im2, ax=xax2)
+                
+                st.pyplot(fig_xai)
+                st.info("The 'Jet' heatmaps above show which time-frequency bins contributed most to the decision. Red/Orange areas are highly suspicious.")
+
+    # Cleanup
+    if os.path.exists(tpath): os.remove(tpath)
