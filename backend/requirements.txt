@@ -8,3 +8,5 @@ librosa==0.11.0
 scipy==1.11.3
 opencv-python==4.8.1.78
 soundfile==0.12.1
+captum==0.8.0
+fpdf==1.7.2
