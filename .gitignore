@@ -4,8 +4,6 @@ venv/
 env/
 ENV/
 
-*.pt
-
 # Python
 __pycache__/
 *.py[cod]
