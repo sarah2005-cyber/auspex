@@ -1,12 +1,22 @@
+# Web Interface & Dashboard
 streamlit==1.28.1
+
+# Deep Learning & XAI Engine
 torch==2.2.0
-numpy==1.26.4
-pandas==2.2.2
-matplotlib==3.8.1
-pydub==0.25.1
-librosa==0.11.0
-scipy==1.11.3
-opencv-python==4.8.1.78
-soundfile==0.12.1
 captum==0.8.0
+
+# Mathematical & Numerical Processing
+numpy==1.26.4
+scipy==1.11.3
+
+# Forensic Feature Extraction (from your Project Report)
+librosa==0.11.0
+pydub==0.25.1
+soundfile==0.12.1
+
+# Visualization & Reporting
+matplotlib==3.8.1
 fpdf==1.7.2
+
+# Image Processing (Headless version for Cloud Hosting)
+opencv-python-headless==4.8.1.78
