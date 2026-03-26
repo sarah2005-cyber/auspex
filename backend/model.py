@@ -249,7 +249,12 @@ def load_model(path):
             st.error(f"Load Error: {e}")
     return None
 
-model_path = st.sidebar.text_input("Model Checkpoint", "Auspex_Forensic_Final_Original_seed42_best.pt")
+# This finds the directory where model.py actually lives
+BASE_DIR = Path(__file__).resolve().parent
+DEFAULT_MODEL_PATH = str(BASE_DIR / "Auspex_Forensic_Final_Original_seed42_best.pt")
+
+# In Sidebar UI
+model_path = st.sidebar.text_input("Model Checkpoint", DEFAULT_MODEL_PATH)
 uploaded_file = st.file_uploader("Upload Bitstream", type=["g729a", "npy"])
 
 model = load_model(model_path)

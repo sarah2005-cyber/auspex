@@ -9,7 +9,7 @@ captum==0.8.0
 numpy==1.26.4
 scipy==1.11.3
 
-# Forensic Feature Extraction (from your Project Report)
+# Forensic Feature Extraction
 librosa==0.11.0
 pydub==0.25.1
 soundfile==0.12.1
