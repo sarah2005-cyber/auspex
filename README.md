@@ -238,16 +238,14 @@ Fully Connected (128→1 output)
 
 #### 4. **Output & Calibration**
 - **Logits**: Raw model output
-- **Sigmoid Activation**: Converts to probability [0, 1]
+- **Sigmoid Activation**: Converts to probability 
 - **Threshold**: Default operating point at 0.5229 (optimized for balanced sensitivity)
 - **Attention Map**: Spatial contribution visualization
 
 ### Model Specifications
-- **Parameters**: ~50K (lightweight for deployment)
+- **Parameters**: ~171K (lightweight for deployment)
 - **Input Size**: 100×80 bits (8000 bits total from G.729a frames)
-- **Inference Time**: <50ms on CPU, <10ms on GPU
 - **Framework**: PyTorch 2.2.0
-- **Precision**: Float32 (can be quantized for edge deployment)
 
 ## Dataset Information
 
@@ -317,7 +315,6 @@ Key parameters in `Final_dataset_collection_10000.ipynb`:
 - `batch_size`: Default 128 (reduce if running out of memory)
 - `num_epochs`: Default 120 (increase for larger datasets)
 - `dropout_rate`: Default 0.4 
-- `aug_strength`: Control data augmentation intensity
 
 ## Performance Metrics
 
@@ -352,12 +349,8 @@ START
     │       - streamlit run model.py
     │
     ├─→ [3B] Jupyter Notebook
-    │       - jupyter notebook
-    │
-    └─→ [3C] Python API
-            - Import StegoCNN
-            - Custom analysis script
-  ↓
+           - jupyter notebook
+    
 [4] Upload/Load Samples
     - G.729a bitstream files
     - Run inference
@@ -393,10 +386,11 @@ Key concepts implemented:
 ## Support & Questions
 
 For issues, questions, or technical support:
-1. Check the troubleshooting section above
-2. Verify all dependencies are correctly installed
-3. Ensure input files are in correct G.729a bitstream format
-4. Review Jupyter notebooks for pipeline examples
+1. Verify all dependencies are correctly installed
+2. Ensure input files are in correct G.729a bitstream format
+3. Review Jupyter notebooks for pipeline examples
+
+Contact me at : sithyfaizah1938@gmail.com
 
 ---
 
