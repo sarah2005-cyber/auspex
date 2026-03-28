@@ -146,7 +146,7 @@ class AuspexReporter:
         pdf.set_fill_color(30, 35, 45); pdf.rect(0, 0, 210, 30, 'F')
         pdf.set_text_color(255, 255, 255); pdf.set_font("Helvetica", 'B', 18)
         pdf.cell(190, 10, "AUSPEX: FORENSIC AUDIT", ln=True, align='C')
-        pdf.set_font("Helvetica", 'I', 8); pdf.cell(190, 5, f"Automated Field Scan | Neural Core v5.8 | Threshold: {self.threshold}", ln=True, align='C')
+        pdf.set_font("Helvetica", 'I', 8); pdf.cell(190, 5, f"Automated Field Scan | Threshold: {self.threshold}", ln=True, align='C')
         pdf.ln(10)
 
         # [1] Metadata
