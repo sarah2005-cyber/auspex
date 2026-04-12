@@ -604,7 +604,7 @@ def load_model(path):
     return None
 
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_MODEL_PATH = str(BASE_DIR / "backend\Auspex_Forensic_Final_Original_3SeedRun_seed42_best.pt")
+DEFAULT_MODEL_PATH = str(BASE_DIR / "Auspex_Forensic_Final_Original_3SeedRun_seed42_best.pt")
 model_path = st.sidebar.text_input("Model Checkpoint", DEFAULT_MODEL_PATH)
 uploaded_file = st.file_uploader("Upload G.729a Bitstream", type=["g729a", "npy"])
 
