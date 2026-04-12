@@ -41,7 +41,7 @@ Model/
 │   ├── requirements.txt                               # Python dependencies
 │   └── Auspex_Forensic_Final_Original_seed42_best.pt  # Pre-trained model weights (state-of-the-art)                                          
 └── dataset script/
-    └── Final_dataset_collection_10000.ipynb           # Dataset collection, preprocessing, and model training pipeline
+    └── Final_dataset_collection_10000.ipynb           # Dataset collection
 ```
 
 ### File Descriptions
