@@ -138,7 +138,7 @@ class SEBlock(nn.Module):
         return x * y.expand_as(x)
 
 class SpatialAttention(nn.Module):
-    """Generates the XAI Heatmap for forensic review."""
+    """Generates the XAI Heatmap for review."""
     def __init__(self, kernel_size=7):
         super().__init__()
         self.conv = nn.Conv2d(2, 1, kernel_size=kernel_size, padding=kernel_size//2, bias=False)
@@ -380,7 +380,7 @@ class AuspexReporter:
         pdf.add_page()
         pdf.set_fill_color(30, 35, 45); pdf.rect(0, 0, 210, 40, 'F') # Slightly larger header
         pdf.set_text_color(255, 255, 255); pdf.set_font("Helvetica", 'B', 18)
-        pdf.cell(190, 10, "AUSPEX: FORENSIC AUDIT", ln=True, align='C')
+        pdf.cell(190, 10, "AUSPEX: AUDIT", ln=True, align='C')
         pdf.set_font("Helvetica", 'I', 9)
         pdf.cell(190, 5, f"Causal Validation Enabled | MD5: {file_hash}", ln=True, align='C')
         pdf.ln(5)
@@ -451,17 +451,17 @@ class AuspexReporter:
         pdf.ln(5)
         pdf.image(img_paths[5], x=self.center_x, y=None, w=self.img_w) # Faithfulness
         pdf.set_font("Helvetica", 'I', 8)
-        pdf.multi_cell(190, 4, "Validation: The Deletion Curve shows the drop in model confidence as evidence is removed. A steep drop confirms the model is relying on robust forensic traces rather than noise.")
+        pdf.multi_cell(190, 4, "Validation: The Deletion Curve shows the drop in model confidence as evidence is removed. A steep drop confirms the model is relying on robust traces rather than noise.")
 
         # --- PAGE 4: GUIDANCE, LIMITATIONS & VERDICT ---
         pdf.add_page();
         pdf.ln(5); pdf.set_font("Helvetica", 'B', 10); pdf.cell(190, 7, " [8] ARTIFACT TECHNICAL DETAILS", ln=True, fill=True); pdf.ln(2)
         pdf.set_font("Helvetica", '', 8.5)
         details = [
-            ("Fig 1 (Scan)", "Comparison of raw bitstream values against high-pass filtered forensic residuals."),
+            ("Fig 1 (Scan)", "Comparison of raw bitstream values against high-pass filtered residuals."),
             ("Fig 2 (Focus)", "Spatiotemporal heatmap highlighting bit regions driving the model's primary classification."),
             ("Fig 3 (Weight)", "Quantification of neural sensitivity across raw, differential, and stability channels."),
-            ("Fig 4 (Timeline)", "Temporal distribution of forensic saliency across the duration of the audio clip."),
+            ("Fig 4 (Timeline)", "Temporal distribution of saliency across the duration of the audio clip."),
             ("Fig 5 (Channels)", "Sensitivity distribution quantifying the influence of raw, differential, and stability features."),
             ("Fig 6 (Causal)", "Overlay validation comparing neural gradients against physical bit-flip impact results."),
             ("Fig 7 (Faithful)", "Statistical curve proving model confidence drops in direct response to evidence removal.")]
@@ -520,7 +520,7 @@ class AuspexReporter:
         hp_k = torch.tensor([[[[-1., -1., -1.], [ -1.,  8., -1.], [-1., -1., -1.]]]]).to(self.device)
         res = F.conv2d(tensor.unsqueeze(0)[:, 0:1, :, :], hp_k, padding=1).squeeze().cpu().numpy()
         axes[1].imshow(res, cmap='inferno', aspect='auto')
-        axes[1].set_title("B. Forensic Residual Scan", fontweight='bold')
+        axes[1].set_title("B. Residual Scan", fontweight='bold')
         axes[1].set_xlabel("Bit Offset"); axes[1].set_ylabel("Frame Index")
 
         plt.tight_layout(); plt.savefig(paths[0], dpi=150); plt.close()
@@ -546,7 +546,7 @@ class AuspexReporter:
         fig, axes = plt.subplots(1, 3, figsize=(18, 5))
         h_ig = np.abs(attr).sum(axis=0); h_ig = (h_ig - h_ig.min()) / (h_ig.max() - h_ig.min() + 1e-8)
         h_bf = np.abs(bitflip_map).sum(axis=0); h_bf = (h_bf - h_bf.min()) / (h_bf.max() - h_bf.min() + 1e-8)
-        titles = ["Neural IG Influence", "Causal Bit-Flip Impact", "Forensic Alignment Overlay"]
+        titles = ["Neural IG Influence", "Causal Bit-Flip Impact", "Alignment Overlay"]
         for i, data in enumerate([h_ig, h_bf, None]):
             ax = axes[i]
             if i < 2:
@@ -588,7 +588,7 @@ def preprocess_input(file_path):
 # 4. STREAMLIT UI
 # ==========================================
 
-st.title("🛡️ AUSPEX: Forensic Dashboard")
+st.title("🛡️ AUSPEX: Dashboard")
 
 @st.cache_resource
 def load_model(path):
@@ -600,7 +600,7 @@ def load_model(path):
     return None
 
 BASE_DIR = Path(__file__).resolve().parent
-DEFAULT_MODEL_PATH = str(BASE_DIR / "Auspex_Forensic_Final_Original_seed42_best.pt")
+DEFAULT_MODEL_PATH = str(BASE_DIR / "backend\Auspex_Forensic_Final_Original_3SeedRun_seed42_best.pt")
 model_path = st.sidebar.text_input("Model Checkpoint", DEFAULT_MODEL_PATH)
 uploaded_file = st.file_uploader("Upload G.729a Bitstream", type=["g729a", "npy"])
 
@@ -658,10 +658,10 @@ if uploaded_file and model:
             
             col_gen, col_dl = st.columns([1, 1])
             with col_gen:
-                btn_gen = st.button("GENERATE FORENSIC EVIDENCE")
+                btn_gen = st.button("GENERATE FORENSIC SUPPORTIVE EVIDENCE")
             
             if btn_gen:
-                with st.spinner("Executing Deep Forensic Audit..."):
+                with st.spinner("Executing Deep Audit..."):
                     with tempfile.TemporaryDirectory() as img_dir:
                         reporter = AuspexReporter(model, DEVICE, threshold=0.5229)
                         
@@ -682,7 +682,7 @@ if uploaded_file and model:
             if 'ev_generated' in st.session_state and st.session_state.ev_generated:
                 with col_dl:
                     st.download_button(
-                        label="DOWNLOAD CALIBRATED FORENSIC REPORT (PDF)",
+                        label="DOWNLOAD CALIBRATED FORENSIC SUPPORTIVE REPORT (PDF)",
                         data=st.session_state.pdf_report,
                         file_name=f"Auspex_Audit_{uploaded_file.name.split('.')[0]}.pdf",
                         mime="application/pdf"
