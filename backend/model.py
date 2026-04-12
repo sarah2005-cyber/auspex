@@ -239,13 +239,17 @@ class AuspexReporter:
         self.center_x = (210 - self.img_w) / 2
         self.center_x_small = (210 - self.small_img_w) / 2
 
-    def _get_file_hash(self, file_path):
+    def _get_file_hash(self, file_buffer):
         hasher = hashlib.md5()
         try:
-            with open(file_path, 'rb') as f:
-                for chunk in iter(lambda: f.read(4096), b""): hasher.update(chunk)
+            # Seek to start just in case it's been read already
+            file_buffer.seek(0)
+            for chunk in iter(lambda: file_buffer.read(4096), b""): 
+                hasher.update(chunk)
+            file_buffer.seek(0) # Reset again for other functions
             return hasher.hexdigest()
-        except: return "HASH_ERROR"
+        except Exception as e: 
+            return f"HASH_ERROR: {str(e)}"
 
     def _compute_bit_flip_impact(self, tensor, top_k_percent=0.02):
         """Optimized Causal Analysis: Only flip bits identified as 'important' by XAI."""
@@ -666,7 +670,7 @@ if uploaded_file and model:
                         reporter = AuspexReporter(model, DEVICE, threshold=0.5229)
                         
                         # Generate report and catch the bytes
-                        pdf_bytes = reporter.generate_report(st.session_state.input_tensor, uploaded_file.name, img_dir)
+                        pdf_bytes = reporter.generate_report(st.session_state.input_tensor, uploaded_file.name, img_dir, uploaded_file)
                         st.session_state.pdf_report = pdf_bytes
                         
                         # Load images from img_dir into session_state
