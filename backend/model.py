@@ -64,7 +64,7 @@ class DualPathwayForensicLayer(nn.Module):
         nn.init.xavier_normal_(self.learnable_filters.weight)
 
     def forward(self, x):
-        # We only apply residuals to Channel 1 (Raw Bits)
+        # Apply residuals to Channel 1 (Raw Bits)
         raw_bits = x[:, 0:1, :, :]
 
         # 1. Apply Fixed Kernels
@@ -118,7 +118,7 @@ class ResidualBlock(nn.Module):
         out += residual
         return F.relu(out)
 
-# --- NEW: Lightweight Channel Attention (SE Block) ---
+# --- Lightweight Channel Attention (SE Block) ---
 class SEBlock(nn.Module):
     """Squeeze-and-Excitation block to recalibrate channel saliency."""
     def __init__(self, channels, reduction=16):
@@ -155,7 +155,6 @@ class SpatialAttention(nn.Module):
 class StegoCNN(nn.Module):
     def __init__(self):
         super().__init__()
-        # Use the new Dual Pathway Layer
         self.hp_layer = DualPathwayForensicLayer()
 
         # Input is now 9 channels:
@@ -231,7 +230,6 @@ class AuspexReporter:
         self.model = model.to(device).eval()
         self.device = device
         self.threshold = threshold
-        # Wrapped for Captum
         self.ig = IntegratedGradients(lambda x: self.model(x)[0])
         self.channel_names = ['Raw Bits', 'Temp. Diff', 'Bit Stability']
         self.img_w = 130
@@ -242,7 +240,6 @@ class AuspexReporter:
     def _get_file_hash(self, file_buffer):
         hasher = hashlib.md5()
         try:
-            # Seek to start just in case it's been read already
             file_buffer.seek(0)
             for chunk in iter(lambda: file_buffer.read(4096), b""): 
                 hasher.update(chunk)
@@ -261,14 +258,12 @@ class AuspexReporter:
             base_prob = torch.sigmoid(self.model(x)[0]).item()
 
         # Identify top indices based on a quick gradient pass or existing attribution
-        # (Assuming you pass 'attr' into this function now)
         flat_attr = np.abs(self.ig.attribute(x, target=0, n_steps=5).cpu().numpy().flatten())
         top_indices = np.argsort(flat_attr)[-int(len(flat_attr) * top_k_percent):]
 
         impact_map = np.zeros(tensor.squeeze(0).shape)
         flat_impact = impact_map.flatten()
 
-        # Only test the 'suspect' bits
         for idx in top_indices:
             x_flip = x.clone()
             x_flip.view(-1)[idx] = 1 - x_flip.view(-1)[idx]
@@ -295,7 +290,6 @@ class AuspexReporter:
 
     def _get_topk_sensitivity(self, tensor, attr, k=0.1):
         """Concentration Check: Does the score hold if we ONLY keep top bits?"""
-        # Ensure tensor is [Batch, C, H, W]
         x = tensor if tensor.dim() == 4 else tensor.unsqueeze(0)
         flat_attr = attr.flatten()
         idx = np.argsort(-np.abs(flat_attr))[:int(len(flat_attr) * k)]
@@ -303,14 +297,12 @@ class AuspexReporter:
         x_top = torch.full_like(x, x.mean()).to(self.device)
         x_top.view(-1)[idx] = x.view(-1)[idx]
         with torch.no_grad():
-            # REMOVED unsqueeze(0) here to fix the crash
             return torch.sigmoid(self.model(x_top)[0]).item()
 
     def _get_bottomk_sensitivity(self, tensor, attr, k=0.2):
         """Negative Control: Does the score stay stable if we remove 'unimportant' bits?"""
         x = tensor if tensor.dim() == 4 else tensor.unsqueeze(0)
         flat_attr = attr.flatten()
-        # Find bits with the LOWEST absolute attribution
         idx = np.argsort(np.abs(flat_attr))[:int(len(flat_attr) * k)]
 
         x_stable = x.clone()
@@ -344,11 +336,9 @@ class AuspexReporter:
 
     def _get_codec_interpretation(self, attr):
         """Maps attribution back to G.729a parameters (LSP, Pitch, Codebook)."""
-        # Note: Ensure G729A_BIT_MAP is defined in your global scope
         bit_importance = np.abs(attr).mean(axis=0)
         forensic_summary = {}
         for param, indices in G729A_BIT_MAP.items():
-            # Calculate mean importance for the columns belonging to this parameter
             forensic_summary[param] = float(bit_importance[indices].mean())
         return sorted(forensic_summary.items(), key=lambda x: x[1], reverse=True)
 
@@ -366,7 +356,7 @@ class AuspexReporter:
         # 2. Optimized Causal Analysis (Bit-Flip)
         bit_flip_map = self._compute_bit_flip_impact(tensor)
 
-        # 3. Generate Visuals - FIX: Pass the img_dir as the FOURTH argument
+        # 3. Generate Visuals
         img_paths = self._create_plots(tensor.squeeze(0), attr, bit_flip_map, img_dir)
 
         # 4. Rigor Metrics & Logic
@@ -389,7 +379,7 @@ class AuspexReporter:
         pdf.cell(190, 5, f"Causal Validation Enabled | MD5: {file_hash}", ln=True, align='C')
         pdf.ln(5)
 
-        # [NEW] Examiner & Methodology Identification
+        # Examiner & Methodology Identification
         pdf.set_font("Helvetica", 'B', 10); pdf.set_text_color(200, 200, 200)
         pdf.cell(95, 5, f"LEAD EXAMINER: Sarah Rahim", align='L')
         pdf.cell(95, 5, f"DATE: {datetime.now().strftime('%Y-%m-%d %H:%M')}", align='R', ln=True)
@@ -401,7 +391,6 @@ class AuspexReporter:
         pdf.cell(190, 5, f" > SAMPLE ID: {sample_name}", ln=True)
         pdf.set_font("Courier", 'B', 9)
         pdf.cell(190, 5, f" > METHOD: AUSPEX-v2 Protocol (Residual-CNN + Integrated Gradients + Causal Bit-Flip)", ln=True)
-        # Calculate new rigor metrics
         stability_score = self._test_robustness(tensor, attr)
         codec_findings = self._get_codec_interpretation(attr)
 
@@ -489,13 +478,11 @@ class AuspexReporter:
         pdf.ln(10); pdf.set_font("Helvetica", 'B', 15); pdf.set_text_color(*b_color)
         pdf.cell(190, 15, f"!!! FINAL VERDICT: {status} !!!", border=1, ln=True, align='C')
 
-        # Instead of saving to a path, return the raw bytes
         pdf_bytes = pdf.output(dest='S').encode('latin-1')
             
         return pdf_bytes
 
     def _create_plots(self, tensor, attr, bitflip_map, img_dir):
-        # Define 6 specific paths for the 6 diagrams we actually use
         fnames = [f"v{i}.png" for i in range(1, 7)]
         paths = [os.path.join(img_dir, f) for f in fnames]
 
@@ -573,7 +560,7 @@ class AuspexReporter:
         plt.xlabel("% of Top-Ranked Bits Affected (Evidence Ranking)"); plt.ylabel("Model Probability (Confidence)")
         plt.legend(); plt.grid(True, alpha=0.3); plt.savefig(paths[5], dpi=150); plt.close()
 
-        return paths # This returns the full absolute paths list
+        return paths 
 
 # ==========================================
 # 3. UTILS & PROCESSING
@@ -693,7 +680,6 @@ if uploaded_file and model:
                     )
 
                 st.write("#### Visual Evidence Panels")
-                # Now v1 is a single combined image
                 st.image(st.session_state.v1, caption="Physical Signal Audit (Raw vs Residual)", use_column_width=True)
                 
                 col_mid = st.columns(2)
