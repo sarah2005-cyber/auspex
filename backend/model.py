@@ -602,7 +602,7 @@ def load_model(path):
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_MODEL_PATH = str(BASE_DIR / "Auspex_Forensic_Final_Original_3SeedRun_seed42_best.pt")
-model_path = st.sidebar.text_input("Model Checkpoint", DEFAULT_MODEL_PATH)
+model_path = st.sidebar.text_input("Model Checkpoint", "Loaded (internal)")
 debug_mode = st.sidebar.checkbox("Enable NFR Debug Info", value=True)
 uploaded_file = st.file_uploader("Upload G.729a Bitstream", type=["g729a", "npy"])
 
