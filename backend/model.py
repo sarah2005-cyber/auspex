@@ -309,6 +309,7 @@ class AuspexReporter:
         x_stable.view(-1)[idx] = x.mean() # Neutralize unimportant bits
         with torch.no_grad():
             return torch.sigmoid(self.model(x_stable)[0]).item()
+
     def _evaluate_faithfulness(self, tensor, attr, steps=20):
         """Calculates how fast model confidence drops when removing 'guilty' bits."""
         idx = np.argsort(-np.abs(attr).flatten())
@@ -341,7 +342,6 @@ class AuspexReporter:
         for param, indices in G729A_BIT_MAP.items():
             forensic_summary[param] = float(bit_importance[indices].mean())
         return sorted(forensic_summary.items(), key=lambda x: x[1], reverse=True)
-
 
     def generate_report(self, tensor, sample_name, img_dir, raw_file_path=None):
         # 1. Neural Attribution (IG)
@@ -479,7 +479,6 @@ class AuspexReporter:
         pdf.cell(190, 15, f"!!! FINAL VERDICT: {status} !!!", border=1, ln=True, align='C')
 
         pdf_bytes = pdf.output(dest='S').encode('latin-1')
-            
         return pdf_bytes
 
     def _create_plots(self, tensor, attr, bitflip_map, img_dir):
@@ -547,7 +546,8 @@ class AuspexReporter:
                 ax.imshow(h_bf, cmap='viridis', alpha=0.3, aspect='auto')
             ax.set_title(titles[i], fontweight='bold')
             ax.set_xlabel("Bit Index"); ax.set_ylabel("Frame")
-            for param, indices in G729A_BIT_MAP.items(): ax.axvline(x=indices[0], color='cyan', linestyle='--', alpha=0.1)
+            for param, indices in G729A_BIT_MAP.items():
+                ax.axvline(x=indices[0], color='cyan', linestyle='--', alpha=0.1)
         plt.tight_layout(); plt.savefig(paths[4], dpi=150); plt.close()
 
         # v6: Faithfulness Curves
@@ -580,6 +580,16 @@ def preprocess_input(file_path):
 # ==========================================
 
 st.title("🛡️ AUSPEX: Dashboard")
+st.warning("This system is intended for decision support in forensic and cybersecurity analysis. Outputs are assistive and should not be treated as definitive legal proof.")
+
+st.markdown("""
+### Workflow
+1. Upload a G.729a bitstream
+2. Run Initial Scan
+3. Review verdict
+4. Generate forensic supportive evidence
+5. Download PDF report
+""")
 
 @st.cache_resource
 def load_model(path):
@@ -593,12 +603,30 @@ def load_model(path):
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_MODEL_PATH = str(BASE_DIR / "Auspex_Forensic_Final_Original_3SeedRun_seed42_best.pt")
 model_path = st.sidebar.text_input("Model Checkpoint", DEFAULT_MODEL_PATH)
+debug_mode = st.sidebar.checkbox("Enable NFR Debug Info", value=True)
 uploaded_file = st.file_uploader("Upload G.729a Bitstream", type=["g729a", "npy"])
 
 model = load_model(model_path)
 
-if 'scanned' not in st.session_state: st.session_state.scanned = False
-if 'current_file' not in st.session_state: st.session_state.current_file = ""
+if 'scanned' not in st.session_state:
+    st.session_state.scanned = False
+if 'current_file' not in st.session_state:
+    st.session_state.current_file = ""
+if 'ev_generated' not in st.session_state:
+    st.session_state.ev_generated = False
+if 'nfr_logs' not in st.session_state:
+    st.session_state.nfr_logs = []
+
+def log_nfr_event(event_type, details):
+    st.session_state.nfr_logs.append({
+        "time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "event": event_type,
+        "details": details
+    })
+
+if uploaded_file is not None and uploaded_file.size == 0:
+    st.error("Uploaded file is empty.")
+    log_nfr_event("reliability_error", "Empty file uploaded")
 
 if uploaded_file and model:
     if st.session_state.current_file != uploaded_file.name:
@@ -612,26 +640,48 @@ if uploaded_file and model:
         st.write("### Sub-perceptual Integrity Check")
         if st.button("RUN INITIAL SCAN"):
             with st.spinner("Processing..."):
-                with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded_file.name).suffix) as tmp:
-                    tmp.write(uploaded_file.getbuffer()); tmp_path = tmp.name
-                
-                tensor_np = preprocess_input(tmp_path)
-                st.session_state.input_tensor = torch.from_numpy(tensor_np).unsqueeze(0).to(DEVICE)
-                
-                with torch.no_grad():
-                    logits, _ = model(st.session_state.input_tensor)
-                    prob = torch.sigmoid(logits).item()
-                
-                st.session_state.prob = prob
-                if prob > 0.5229:
-                    st.session_state.verdict = "STEGO"
-                    st.session_state.display_conf = prob * 100
-                else:
-                    st.session_state.verdict = "COVER"
-                    st.session_state.display_conf = (1 - prob) * 100
-                
-                st.session_state.scanned = True
-                os.remove(tmp_path)
+                scan_start = time.perf_counter()
+                try:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=Path(uploaded_file.name).suffix) as tmp:
+                        tmp.write(uploaded_file.getbuffer())
+                        tmp_path = tmp.name
+
+                    tensor_np = preprocess_input(tmp_path)
+                    st.session_state.input_tensor = torch.from_numpy(tensor_np).unsqueeze(0).to(DEVICE)
+
+                    with torch.no_grad():
+                        logits, _ = model(st.session_state.input_tensor)
+                        prob = torch.sigmoid(logits).item()
+
+                    st.session_state.prob = prob
+                    if prob > 0.5229:
+                        st.session_state.verdict = "STEGO"
+                        st.session_state.display_conf = prob * 100
+                    else:
+                        st.session_state.verdict = "COVER"
+                        st.session_state.display_conf = (1 - prob) * 100
+
+                    st.session_state.scanned = True
+                    st.session_state.ev_generated = False
+                    log_nfr_event("reliability_success", f"Quick scan success for {uploaded_file.name}")
+
+                except Exception:
+                    st.error("Processing failed due to invalid or unsupported input.")
+                    st.session_state.scanned = False
+                    log_nfr_event("reliability_error", f"Quick scan failed for {uploaded_file.name}")
+                    log_nfr_event("security_safe_error", "Invalid input blocked without stack trace exposure")
+
+                finally:
+                    if 'tmp_path' in locals() and os.path.exists(tmp_path):
+                        os.remove(tmp_path)
+
+                scan_end = time.perf_counter()
+                scan_elapsed = scan_end - scan_start
+                st.session_state.scan_time = scan_elapsed
+                log_nfr_event("performance_quick_scan", f"{scan_elapsed:.4f}s for {uploaded_file.name}")
+
+                if debug_mode:
+                    st.caption(f"Quick Scan Time: {scan_elapsed:.4f} seconds")
 
         if st.session_state.scanned:
             if st.session_state.verdict == "STEGO":
@@ -639,6 +689,13 @@ if uploaded_file and model:
             else:
                 st.success(f"CLEAN | {st.session_state.display_conf:.2f}% Confidence")
             st.progress(st.session_state.prob)
+
+            if debug_mode:
+                st.write({
+                    "raw_probability": float(st.session_state.prob),
+                    "verdict": st.session_state.verdict,
+                    "display_confidence": float(st.session_state.display_conf)
+                })
 
     with tab2:
         if not st.session_state.scanned:
@@ -653,22 +710,50 @@ if uploaded_file and model:
             
             if btn_gen:
                 with st.spinner("Executing Deep Audit..."):
-                    with tempfile.TemporaryDirectory() as img_dir:
-                        reporter = AuspexReporter(model, DEVICE, threshold=0.5229)
-                        
-                        # Generate report and catch the bytes
-                        pdf_bytes = reporter.generate_report(st.session_state.input_tensor, uploaded_file.name, img_dir, uploaded_file)
-                        st.session_state.pdf_report = pdf_bytes
-                        
-                        # Load images from img_dir into session_state
-                        with Image.open(os.path.join(img_dir, "v1.png")) as img: st.session_state.v1 = img.copy()
-                        with Image.open(os.path.join(img_dir, "v2.png")) as img: st.session_state.v2 = img.copy()
-                        with Image.open(os.path.join(img_dir, "v3.png")) as img: st.session_state.v3 = img.copy()
-                        with Image.open(os.path.join(img_dir, "v4.png")) as img: st.session_state.v4 = img.copy()
-                        with Image.open(os.path.join(img_dir, "v5.png")) as img: st.session_state.v5 = img.copy()
-                        with Image.open(os.path.join(img_dir, "v6.png")) as img: st.session_state.v6 = img.copy()
+                    deep_start = time.perf_counter()
+                    try:
+                        with tempfile.TemporaryDirectory() as img_dir:
+                            reporter = AuspexReporter(model, DEVICE, threshold=0.5229)
+                            
+                            # Generate report and catch the bytes
+                            pdf_bytes = reporter.generate_report(
+                                st.session_state.input_tensor,
+                                uploaded_file.name,
+                                img_dir,
+                                uploaded_file
+                            )
+                            st.session_state.pdf_report = pdf_bytes
+                            
+                            # Load images from img_dir into session_state
+                            with Image.open(os.path.join(img_dir, "v1.png")) as img:
+                                st.session_state.v1 = img.copy()
+                            with Image.open(os.path.join(img_dir, "v2.png")) as img:
+                                st.session_state.v2 = img.copy()
+                            with Image.open(os.path.join(img_dir, "v3.png")) as img:
+                                st.session_state.v3 = img.copy()
+                            with Image.open(os.path.join(img_dir, "v4.png")) as img:
+                                st.session_state.v4 = img.copy()
+                            with Image.open(os.path.join(img_dir, "v5.png")) as img:
+                                st.session_state.v5 = img.copy()
+                            with Image.open(os.path.join(img_dir, "v6.png")) as img:
+                                st.session_state.v6 = img.copy()
 
-                        st.session_state.ev_generated = True
+                            st.session_state.ev_generated = True
+                            log_nfr_event("reliability_success", f"Deep analysis success for {uploaded_file.name}")
+
+                    except Exception:
+                        st.error("Deep analysis failed due to invalid input or report generation issue.")
+                        st.session_state.ev_generated = False
+                        log_nfr_event("reliability_error", f"Deep analysis failed for {uploaded_file.name}")
+                        log_nfr_event("security_safe_error", "Deep analysis error handled without exposing stack trace")
+
+                    deep_end = time.perf_counter()
+                    deep_elapsed = deep_end - deep_start
+                    st.session_state.deep_time = deep_elapsed
+                    log_nfr_event("performance_deep_analysis", f"{deep_elapsed:.4f}s for {uploaded_file.name}")
+
+                    if debug_mode:
+                        st.caption(f"Deep Analysis Time: {deep_elapsed:.4f} seconds")
 
             if 'ev_generated' in st.session_state and st.session_state.ev_generated:
                 with col_dl:
@@ -691,3 +776,7 @@ if uploaded_file and model:
                 st.image(st.session_state.v4, caption="Channel Reliance", width=500)
                 st.image(st.session_state.v5, caption="Causal Bit-Flip Alignment", use_column_width=True)
                 st.image(st.session_state.v6, caption="Forensic Faithfulness Curve", use_column_width=True)
+
+if debug_mode and st.session_state.nfr_logs:
+    st.write("### NFR Debug Log")
+    st.dataframe(pd.DataFrame(st.session_state.nfr_logs))
